@@ -4,10 +4,6 @@ extern crate vk_mem;
 use ash::extensions::ext::DebugReport;
 use std::os::raw::{c_char, c_void};
 
-fn extension_names() -> Vec<*const i8> {
-    vec![DebugReport::name().as_ptr()]
-}
-
 unsafe extern "system" fn vulkan_debug_callback(
     _: ash::vk::DebugReportFlagsEXT,
     _: ash::vk::DebugReportObjectTypeEXT,
@@ -50,7 +46,7 @@ impl TestHarness {
             .application_version(0)
             .engine_name(&app_name)
             .engine_version(0)
-            .api_version(ash::vk::make_version(1, 0, 0));
+            .api_version(ash::vk::make_api_version(0, 1, 0, 0));
 
         let layer_names = [::std::ffi::CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
         let layers_names_raw: Vec<*const i8> = layer_names
@@ -58,12 +54,23 @@ impl TestHarness {
             .map(|raw_name| raw_name.as_ptr())
             .collect();
 
-        let extension_names_raw = extension_names();
+        #[cfg(target_os = "macos")]
+        let portability_enumeration_name =
+            std::ffi::CString::new("VK_KHR_portability_enumeration").unwrap();
+        let extension_names_raw = vec![
+            DebugReport::name().as_ptr(),
+            #[cfg(target_os = "macos")]
+            portability_enumeration_name.as_ptr(),
+        ];
+
         let create_info = ash::vk::InstanceCreateInfo::builder()
             .application_info(&app_info)
             .enabled_layer_names(&layers_names_raw)
             .enabled_extension_names(&extension_names_raw);
 
+        #[cfg(target_os = "macos")]
+        let create_info =
+            create_info.flags(ash::vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR);
 
         let entry = unsafe { ash::Entry::load().unwrap() };
         let instance: ash::Instance = unsafe {
@@ -116,8 +123,16 @@ impl TestHarness {
             .queue_priorities(&priorities)
             .build()];
 
+        #[cfg(target_os = "macos")]
+        let portability_subset_name = std::ffi::CString::new("VK_KHR_portability_subset").unwrap();
+        #[cfg(target_os = "macos")]
+        let device_extensions = [portability_subset_name.as_ptr()];
+
         let device_create_info =
             ash::vk::DeviceCreateInfo::builder().queue_create_infos(&queue_info);
+
+        #[cfg(target_os = "macos")]
+        let device_create_info = device_create_info.enabled_extension_names(&device_extensions);
 
         let device: ash::Device = unsafe {
             instance
@@ -136,7 +151,8 @@ impl TestHarness {
     }
 
     pub fn create_allocator(&self) -> vk_mem::Allocator {
-        let create_info = vk_mem::AllocatorCreateInfo::new(&self.instance, &self.device, &self.physical_device);
+        let create_info =
+            vk_mem::AllocatorCreateInfo::new(&self.instance, &self.device, &self.physical_device);
         vk_mem::Allocator::new(create_info).unwrap()
     }
 }
@@ -156,7 +172,7 @@ fn create_allocator() {
 fn create_gpu_buffer() {
     let harness = TestHarness::new();
     let allocator = harness.create_allocator();
-    let allocation_info =  vk_mem::AllocationCreateInfo::new().usage(vk_mem::MemoryUsage::GpuOnly);
+    let allocation_info = vk_mem::AllocationCreateInfo::new().usage(vk_mem::MemoryUsage::GpuOnly);
 
     unsafe {
         let (buffer, allocation, allocation_info) = allocator
@@ -180,10 +196,11 @@ fn create_gpu_buffer() {
 fn create_cpu_buffer_preferred() {
     let harness = TestHarness::new();
     let allocator = harness.create_allocator();
-    let allocation_info =  vk_mem::AllocationCreateInfo::new()
+    let allocation_info = vk_mem::AllocationCreateInfo::new()
         .required_flags(ash::vk::MemoryPropertyFlags::HOST_VISIBLE)
-        .preferred_flags(ash::vk::MemoryPropertyFlags::HOST_COHERENT
-            | ash::vk::MemoryPropertyFlags::HOST_CACHED)
+        .preferred_flags(
+            ash::vk::MemoryPropertyFlags::HOST_COHERENT | ash::vk::MemoryPropertyFlags::HOST_CACHED,
+        )
         .flags(vk_mem::AllocationCreateFlags::MAPPED);
     unsafe {
         let (buffer, allocation, allocation_info) = allocator
@@ -215,8 +232,9 @@ fn create_gpu_buffer_pool() {
 
     let mut allocation_info = vk_mem::AllocationCreateInfo::new()
         .required_flags(ash::vk::MemoryPropertyFlags::HOST_VISIBLE)
-        .preferred_flags(ash::vk::MemoryPropertyFlags::HOST_COHERENT
-            | ash::vk::MemoryPropertyFlags::HOST_CACHED)
+        .preferred_flags(
+            ash::vk::MemoryPropertyFlags::HOST_COHERENT | ash::vk::MemoryPropertyFlags::HOST_CACHED,
+        )
         .flags(vk_mem::AllocationCreateFlags::MAPPED);
     unsafe {
         let memory_type_index = allocator
@@ -245,8 +263,7 @@ fn create_gpu_buffer_pool() {
 fn test_gpu_stats() {
     let harness = TestHarness::new();
     let allocator = harness.create_allocator();
-    let allocation_info = vk_mem::AllocationCreateInfo::new()
-        .usage(vk_mem::MemoryUsage::GpuOnly);
+    let allocation_info = vk_mem::AllocationCreateInfo::new().usage(vk_mem::MemoryUsage::GpuOnly);
 
     unsafe {
         let stats_1 = allocator.calculate_stats().unwrap();
@@ -286,8 +303,7 @@ fn test_stats_string() {
     let harness = TestHarness::new();
     let allocator = harness.create_allocator();
 
-    let allocation_info = vk_mem::AllocationCreateInfo::new()
-        .usage(vk_mem::MemoryUsage::GpuOnly);
+    let allocation_info = vk_mem::AllocationCreateInfo::new().usage(vk_mem::MemoryUsage::GpuOnly);
 
     unsafe {
         let stats_1 = allocator.build_stats_string(true).unwrap();
